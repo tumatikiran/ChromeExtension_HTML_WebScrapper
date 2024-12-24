@@ -17,11 +17,20 @@ document.getElementById('cloneButton').addEventListener('click', async () => {
   
   // Get options
   const options = {
+    // Basic Resources
     cloneHTML: document.getElementById('cloneHTML').checked,
     cloneCSS: document.getElementById('cloneCSS').checked,
     cloneJS: document.getElementById('cloneJS').checked,
+    
+    // Media Resources
     cloneImages: document.getElementById('cloneImages').checked,
-    handleCORS: document.getElementById('handleCORS').checked
+    cloneFonts: document.getElementById('cloneFonts').checked,
+    cloneVideos: document.getElementById('cloneVideos').checked,
+    cloneAudio: document.getElementById('cloneAudio').checked,
+    
+    // Additional Settings
+    handleCORS: document.getElementById('handleCORS').checked,
+    preserveStructure: document.getElementById('preserveStructure').checked
   };
   
   // Reset UI

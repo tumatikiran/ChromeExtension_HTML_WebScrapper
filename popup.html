@@ -68,30 +68,70 @@
       max-height: 100px;
       overflow-y: auto;
     }
+    .options-group {
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #ddd;
+    }
+    .options-group:last-child {
+      border-bottom: none;
+    }
+    .group-title {
+      font-weight: bold;
+      margin: 5px 0;
+      color: #333;
+    }
   </style>
 </head>
 <body>
   <h2>Website Cloner</h2>
   <div class="options">
-    <div class="option-item">
-      <input type="checkbox" id="cloneHTML" checked>
-      <label for="cloneHTML">Clone HTML</label>
+    <div class="options-group">
+      <div class="group-title">Basic Resources</div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneHTML" checked>
+        <label for="cloneHTML">HTML Structure</label>
+      </div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneCSS" checked>
+        <label for="cloneCSS">CSS Styles</label>
+      </div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneJS" checked>
+        <label for="cloneJS">JavaScript</label>
+      </div>
     </div>
-    <div class="option-item">
-      <input type="checkbox" id="cloneCSS" checked>
-      <label for="cloneCSS">Clone CSS</label>
+    
+    <div class="options-group">
+      <div class="group-title">Media Resources</div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneImages" checked>
+        <label for="cloneImages">Images</label>
+      </div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneFonts" checked>
+        <label for="cloneFonts">Fonts</label>
+      </div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneVideos" checked>
+        <label for="cloneVideos">Videos</label>
+      </div>
+      <div class="option-item">
+        <input type="checkbox" id="cloneAudio" checked>
+        <label for="cloneAudio">Audio</label>
+      </div>
     </div>
-    <div class="option-item">
-      <input type="checkbox" id="cloneJS" checked>
-      <label for="cloneJS">Clone JavaScript</label>
-    </div>
-    <div class="option-item">
-      <input type="checkbox" id="cloneImages" checked>
-      <label for="cloneImages">Clone Images</label>
-    </div>
-    <div class="option-item">
-      <input type="checkbox" id="handleCORS" checked>
-      <label for="handleCORS">Handle CORS Errors</label>
+
+    <div class="options-group">
+      <div class="group-title">Additional Settings</div>
+      <div class="option-item">
+        <input type="checkbox" id="handleCORS" checked>
+        <label for="handleCORS">Handle CORS Errors</label>
+      </div>
+      <div class="option-item">
+        <input type="checkbox" id="preserveStructure" checked>
+        <label for="preserveStructure">Preserve File Structure</label>
+      </div>
     </div>
   </div>
   <button id="cloneButton">Clone Current Page</button>

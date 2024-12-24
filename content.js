@@ -28,15 +28,21 @@ async function cloneWebsite(options) {
       html: options.cloneHTML ? document.documentElement.outerHTML : null,
       styles: [],
       scripts: [],
-      images: []
+      images: [],
+      fonts: [],
+      videos: [],
+      audio: []
     };
 
     let progress = 0;
     const progressSteps = {
-      css: options.cloneCSS ? 20 : 0,
-      js: options.cloneJS ? 20 : 0,
-      images: options.cloneImages ? 20 : 0,
-      zip: 40
+      css: options.cloneCSS ? 15 : 0,
+      js: options.cloneJS ? 15 : 0,
+      images: options.cloneImages ? 15 : 0,
+      fonts: options.cloneFonts ? 15 : 0,
+      videos: options.cloneVideos ? 15 : 0,
+      audio: options.cloneAudio ? 15 : 0,
+      zip: 10
     };
 
     // Clone CSS if selected
@@ -146,7 +152,135 @@ async function cloneWebsite(options) {
       progress += progressSteps.images;
     }
 
-    // Create ZIP file
+    // Clone Fonts if selected
+    if (options.cloneFonts) {
+      chrome.runtime.sendMessage({ 
+        action: 'updateStatus', 
+        message: 'Cloning Fonts...', 
+        progress 
+      });
+
+      // Get fonts from @font-face rules
+      const fontUrls = new Set();
+      Array.from(document.styleSheets).forEach(sheet => {
+        try {
+          Array.from(sheet.cssRules || []).forEach(rule => {
+            if (rule instanceof CSSFontFaceRule) {
+              const urlMatch = rule.cssText.match(/url\(['"]?(.*?)['"]?\)/);
+              if (urlMatch) {
+                fontUrls.add(urlMatch[1]);
+              }
+            }
+          });
+        } catch (e) {
+          if (options.handleCORS) {
+            chrome.runtime.sendMessage({ 
+              action: 'updateStatus', 
+              error: `Failed to access stylesheet: ${e.message}`
+            });
+          }
+        }
+      });
+
+      for (const url of fontUrls) {
+        try {
+          const response = await fetch(url);
+          const blob = await response.blob();
+          resources.fonts.push({
+            url: url,
+            blob: blob
+          });
+        } catch (error) {
+          const errorMessage = `Failed to clone font from ${url}: ${error.message}`;
+          console.error(errorMessage);
+          if (options.handleCORS) {
+            chrome.runtime.sendMessage({ 
+              action: 'updateStatus', 
+              error: errorMessage
+            });
+          }
+        }
+      }
+      progress += progressSteps.fonts;
+    }
+
+    // Clone Videos if selected
+    if (options.cloneVideos) {
+      chrome.runtime.sendMessage({ 
+        action: 'updateStatus', 
+        message: 'Cloning Videos...', 
+        progress 
+      });
+
+      const videos = [
+        ...Array.from(document.getElementsByTagName('video')),
+        ...Array.from(document.getElementsByTagName('source'))
+      ];
+
+      for (const video of videos) {
+        const url = video.src || video.currentSrc;
+        if (url) {
+          try {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            resources.videos.push({
+              url: url,
+              blob: blob
+            });
+          } catch (error) {
+            const errorMessage = `Failed to clone video from ${url}: ${error.message}`;
+            console.error(errorMessage);
+            if (options.handleCORS) {
+              chrome.runtime.sendMessage({ 
+                action: 'updateStatus', 
+                error: errorMessage
+              });
+            }
+          }
+        }
+      }
+      progress += progressSteps.videos;
+    }
+
+    // Clone Audio if selected
+    if (options.cloneAudio) {
+      chrome.runtime.sendMessage({ 
+        action: 'updateStatus', 
+        message: 'Cloning Audio...', 
+        progress 
+      });
+
+      const audioElements = [
+        ...Array.from(document.getElementsByTagName('audio')),
+        ...Array.from(document.getElementsByTagName('source'))
+      ];
+
+      for (const audio of audioElements) {
+        const url = audio.src || audio.currentSrc;
+        if (url) {
+          try {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            resources.audio.push({
+              url: url,
+              blob: blob
+            });
+          } catch (error) {
+            const errorMessage = `Failed to clone audio from ${url}: ${error.message}`;
+            console.error(errorMessage);
+            if (options.handleCORS) {
+              chrome.runtime.sendMessage({ 
+                action: 'updateStatus', 
+                error: errorMessage
+              });
+            }
+          }
+        }
+      }
+      progress += progressSteps.audio;
+    }
+
+    // Create ZIP with all resources
     chrome.runtime.sendMessage({ 
       action: 'updateStatus', 
       message: 'Creating ZIP file...', 
@@ -154,34 +288,83 @@ async function cloneWebsite(options) {
     });
 
     const zip = new JSZip();
-    
-    // Add selected resources to ZIP
+
+    // Helper function to get relative path and ensure no duplicate folders
+    const getRelativePath = (url, type) => {
+      try {
+        if (url === 'inline') {
+          return `${type}/inline-${Date.now()}.${type}`;
+        }
+        
+        const urlObj = new URL(url);
+        let path = urlObj.pathname.substring(1);
+        
+        // If preserving structure, keep the full path but remove any query parameters
+        if (options.preserveStructure) {
+          return path.split('?')[0];
+        }
+        
+        // If not preserving structure, just keep the filename
+        return `${type}/${path.split('/').pop()}`;
+      } catch {
+        return `${type}/${url.split('/').pop() || `file-${Date.now()}.${type}`}`;
+      }
+    };
+
+    // Add HTML
     if (options.cloneHTML) {
       zip.file('index.html', resources.html);
     }
-    
+
+    // Add CSS files
     if (options.cloneCSS) {
-      const cssFolder = zip.folder('css');
       resources.styles.forEach((style, index) => {
-        const fileName = style.url === 'inline' ? `inline-style-${index}.css` : style.url.split('/').pop();
-        cssFolder.file(fileName, style.content);
+        const path = style.url === 'inline' 
+          ? `css/inline-style-${index}.css`
+          : getRelativePath(style.url, 'css');
+        zip.file(path, style.content);
       });
     }
-    
+
+    // Add JS files
     if (options.cloneJS) {
-      const jsFolder = zip.folder('js');
       resources.scripts.forEach((script, index) => {
-        const fileName = script.url === 'inline' ? `inline-script-${index}.js` : script.url.split('/').pop();
-        jsFolder.file(fileName, script.content);
+        const path = script.url === 'inline'
+          ? `js/inline-script-${index}.js`
+          : getRelativePath(script.url, 'js');
+        zip.file(path, script.content);
       });
     }
-    
+
+    // Add Images
     if (options.cloneImages) {
-      const imgFolder = zip.folder('images');
       resources.images.forEach((image, index) => {
-        const extension = image.url.split('.').pop() || 'png';
-        const fileName = `image${index}.${extension}`;
-        imgFolder.file(fileName, image.blob);
+        const path = getRelativePath(image.url, 'images');
+        zip.file(path, image.blob);
+      });
+    }
+
+    // Add Fonts
+    if (options.cloneFonts) {
+      resources.fonts.forEach((font, index) => {
+        const path = getRelativePath(font.url, 'fonts');
+        zip.file(path, font.blob);
+      });
+    }
+
+    // Add Videos
+    if (options.cloneVideos) {
+      resources.videos.forEach((video, index) => {
+        const path = getRelativePath(video.url, 'videos');
+        zip.file(path, video.blob);
+      });
+    }
+
+    // Add Audio
+    if (options.cloneAudio) {
+      resources.audio.forEach((audio, index) => {
+        const path = getRelativePath(audio.url, 'audio');
+        zip.file(path, audio.blob);
       });
     }
 
