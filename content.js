@@ -132,6 +132,171 @@ function getIconUrls() {
   return Array.from(urls);
 }
 
+// Function to convert relative URLs to absolute
+function makeUrlAbsolute(url, base) {
+  try {
+    // If it's already an absolute URL or a data URL, return as is
+    if (url.match(/^(https?:)?\/\//) || url.startsWith('data:')) {
+      return url;
+    }
+    // Handle root-relative URLs
+    if (url.startsWith('/')) {
+      const baseUrl = new URL(base);
+      return `${baseUrl.origin}${url}`;
+    }
+    // Convert relative URL to absolute
+    return new URL(url, base).href;
+  } catch (error) {
+    console.error('Error making URL absolute:', error);
+    return url;
+  }
+}
+
+// Function to rewrite URLs in HTML content
+function rewriteHtmlUrls(html, baseUrl) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  
+  // Process links
+  doc.querySelectorAll('a[href]').forEach(link => {
+    try {
+      const href = link.getAttribute('href');
+      const absoluteUrl = makeUrlAbsolute(href, baseUrl);
+      const url = new URL(absoluteUrl);
+      
+      // Only modify internal links
+      if (url.hostname === new URL(baseUrl).hostname) {
+        let newPath = url.pathname;
+        if (newPath === '/') {
+          newPath = 'index.html';
+        } else if (!newPath.endsWith('.html')) {
+          newPath = newPath.replace(/\/$/, '') + '.html';
+        }
+        link.setAttribute('href', newPath.replace(/^\//, ''));
+      }
+    } catch (error) {
+      console.error('Error processing link:', error);
+    }
+  });
+
+  // Rewrite URLs in various attributes
+  const urlAttributes = {
+    'a': 'href',
+    'img': 'src',
+    'link': 'href',
+    'script': 'src',
+    'form': 'action',
+    'iframe': 'src',
+    'video': 'src',
+    'audio': 'src',
+    'source': 'src',
+    'track': 'src',
+    'embed': 'src',
+    'object': 'data'
+  };
+
+  // Process each element type and its corresponding attribute
+  Object.entries(urlAttributes).forEach(([tag, attr]) => {
+    doc.querySelectorAll(tag).forEach(element => {
+      if (element.hasAttribute(attr)) {
+        const originalUrl = element.getAttribute(attr);
+        const absoluteUrl = makeUrlAbsolute(originalUrl, baseUrl);
+        
+        // Update the attribute with the local path
+        if (!absoluteUrl.startsWith('data:')) {
+          try {
+            const url = new URL(absoluteUrl);
+            const localPath = url.pathname.substring(1); // Remove leading slash
+            element.setAttribute(attr, localPath);
+          } catch (error) {
+            console.error('Error processing URL:', error);
+          }
+        }
+      }
+    });
+  });
+
+  // Rewrite inline styles
+  doc.querySelectorAll('[style]').forEach(element => {
+    const style = element.getAttribute('style');
+    const rewrittenStyle = rewriteCssUrls(style, baseUrl);
+    element.setAttribute('style', rewrittenStyle);
+  });
+
+  return doc.documentElement.outerHTML;
+}
+
+// Function to rewrite URLs in CSS content
+function rewriteCssUrls(css, baseUrl) {
+  return css.replace(/url\(['"]?([^'"()]+)['"]?\)/g, (match, url) => {
+    if (url.startsWith('data:')) {
+      return match;
+    }
+    const absoluteUrl = makeUrlAbsolute(url, baseUrl);
+    try {
+      const urlObj = new URL(absoluteUrl);
+      return `url('${urlObj.pathname.substring(1)}')`;
+    } catch (error) {
+      console.error('Error processing CSS URL:', error);
+      return match;
+    }
+  });
+}
+
+// Add this function to get all internal page URLs
+function getInternalPageUrls(baseUrl) {
+  const urls = new Set();
+  const domain = new URL(baseUrl).hostname;
+  
+  // Get all internal links
+  document.querySelectorAll('a[href]').forEach(link => {
+    try {
+      const href = link.href;
+      const url = new URL(href);
+      
+      // Only include links from same domain and not already processed
+      if (url.hostname === domain && !urls.has(href)) {
+        urls.add(href);
+      }
+    } catch (error) {
+      console.error('Error processing link:', error);
+    }
+  });
+  
+  return Array.from(urls);
+}
+
+// Add this function to clone a single page
+async function cloneSinglePage(url, zip, options, baseUrl) {
+  try {
+    const response = await fetch(url);
+    const html = await response.text();
+    
+    // Get the relative path for this page
+    const urlObj = new URL(url);
+    let path = urlObj.pathname;
+    if (path === '/') {
+      path = 'index.html';
+    } else if (!path.endsWith('.html')) {
+      path = path.replace(/\/$/, '') + '.html';
+    }
+    
+    // Remove leading slash
+    path = path.replace(/^\//, '');
+    
+    // Rewrite URLs in the HTML content
+    const rewrittenHtml = rewriteHtmlUrls(html, baseUrl);
+    
+    // Add to zip
+    zip.file(path, rewrittenHtml);
+    
+    return true;
+  } catch (error) {
+    console.error(`Error cloning page ${url}:`, error);
+    return false;
+  }
+}
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'startCloning') {
@@ -158,7 +323,34 @@ async function cloneWebsite(options, folderName) {
       progress: 0 
     });
 
-    const baseUrl = window.location.origin;
+    const baseUrl = window.location.href;
+    
+    // Get all internal pages to clone
+    const internalPages = getInternalPageUrls(baseUrl);
+    const totalPages = internalPages.length;
+    let pagesProcessed = 0;
+
+    chrome.runtime.sendMessage({ 
+      action: 'updateStatus', 
+      message: `Found ${totalPages} pages to clone...`, 
+      progress: 0 
+    });
+
+    // Create ZIP
+    const zip = new JSZip();
+  
+    // Clone each internal page
+    for (const pageUrl of internalPages) {
+      chrome.runtime.sendMessage({ 
+        action: 'updateStatus', 
+        message: `Cloning page: ${pageUrl}`, 
+        progress: (pagesProcessed / totalPages) * 50 
+      });
+      
+      await cloneSinglePage(pageUrl, zip, options, baseUrl);
+      pagesProcessed++;
+    }
+
     const resources = {
       html: options.cloneHTML ? document.documentElement.outerHTML : null,
       styles: [],
@@ -181,6 +373,11 @@ async function cloneWebsite(options, folderName) {
       audio: options.cloneAudio ? 15 : 0,
       zip: 10
     };
+
+    // Rewrite URLs in HTML
+    if (options.cloneHTML) {
+      resources.html = rewriteHtmlUrls(document.documentElement.outerHTML, baseUrl);
+    }
 
     // Clone CSS if selected
     if (options.cloneCSS) {
@@ -220,6 +417,14 @@ async function cloneWebsite(options, folderName) {
       progress += progressSteps.css;
     }
 
+    // Update CSS processing
+    if (options.cloneCSS) {
+      resources.styles = resources.styles.map(style => ({
+        ...style,
+        content: rewriteCssUrls(style.content, baseUrl)
+      }));
+    }
+
     // Clone JavaScript if selected
     if (options.cloneJS) {
       chrome.runtime.sendMessage({ 
@@ -256,6 +461,15 @@ async function cloneWebsite(options, folderName) {
         }
       }
       progress += progressSteps.js;
+    }
+
+    // Update JavaScript processing to handle any URLs in JS files
+    if (options.cloneJS) {
+      resources.scripts = resources.scripts.map(script => ({
+        ...script,
+        // Optionally process URLs in JavaScript files if needed
+        content: script.content
+      }));
     }
 
     // Clone Images if selected
@@ -459,8 +673,8 @@ async function cloneWebsite(options, folderName) {
       const iconUrls = getIconUrls();
       for (const url of iconUrls) {
         try {
-          const response = await fetch(url);
-          const blob = await response.blob();
+      const response = await fetch(url);
+      const blob = await response.blob();
           resources.icons.push({
             url: url,
             blob: blob
@@ -485,16 +699,15 @@ async function cloneWebsite(options, folderName) {
       progress 
     });
 
-    const zip = new JSZip();
-
     // Helper function to get relative path and preserve original structure
     const getRelativePath = (url, type) => {
       try {
         if (url === 'inline') {
           return `${type}/inline-${Date.now()}.${type}`;
         }
-        
-        const urlObj = new URL(url);
+
+        const absoluteUrl = makeUrlAbsolute(url, baseUrl);
+        const urlObj = new URL(absoluteUrl);
         let path = urlObj.pathname;
         
         // Remove leading slash if present
@@ -502,18 +715,14 @@ async function cloneWebsite(options, folderName) {
           path = path.substring(1);
         }
 
-        // If preserving structure, keep the full path but remove any query parameters
+        // If preserving structure, keep the path but remove any query parameters
         if (options.preserveStructure) {
           return path.split('?')[0];
         }
         
-        // If not preserving structure, maintain at least the last folder and filename
-        const parts = path.split('/');
-        if (parts.length > 1) {
-          return `${type}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
-        }
-        
-        return `${type}/${path}`;
+        // If not preserving structure, organize by type
+        const filename = path.split('/').pop().split('?')[0];
+        return `${type}/${filename}`;
       } catch (error) {
         console.error('Error processing path:', error);
         return `${type}/${url.split('/').pop() || `file-${Date.now()}.${type}`}`;
