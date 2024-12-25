@@ -1,3 +1,53 @@
+// Add this function at the beginning of the file to extract URLs from CSS
+function extractUrlsFromCSS(cssText) {
+  const urlRegex = /url\(['"]?([^'"()]+)['"]?\)/g;
+  const urls = new Set();
+  let match;
+  
+  while ((match = urlRegex.exec(cssText)) !== null) {
+    if (match[1] && !match[1].startsWith('data:')) {
+      urls.add(match[1]);
+    }
+  }
+  
+  return Array.from(urls);
+}
+
+// Add this function to get computed styles
+function getBackgroundImages() {
+  const elements = document.querySelectorAll('*');
+  const urls = new Set();
+
+  elements.forEach(element => {
+    const computedStyle = window.getComputedStyle(element);
+    const backgroundImage = computedStyle.backgroundImage;
+    
+    if (backgroundImage && backgroundImage !== 'none') {
+      const extractedUrls = extractUrlsFromCSS(backgroundImage);
+      extractedUrls.forEach(url => urls.add(url));
+    }
+  });
+
+  return Array.from(urls);
+}
+
+// Add this function to get favicon and other icons
+function getIconUrls() {
+  const urls = new Set();
+  
+  // Get favicon
+  const favicon = document.querySelector('link[rel="shortcut icon"], link[rel="icon"]');
+  if (favicon) {
+    urls.add(favicon.href);
+  }
+  
+  // Get other icons (apple-touch-icon, etc.)
+  const icons = document.querySelectorAll('link[rel*="icon"]');
+  icons.forEach(icon => urls.add(icon.href));
+  
+  return Array.from(urls);
+}
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'startCloning') {
@@ -11,11 +61,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
       return;
     }
-    cloneWebsite(request.options);
+    const folderName = request.folderName || 'website-clone';
+    cloneWebsite(request.options, folderName);
   }
 });
 
-async function cloneWebsite(options) {
+async function cloneWebsite(options, folderName) {
   try {
     chrome.runtime.sendMessage({ 
       action: 'updateStatus', 
@@ -31,7 +82,9 @@ async function cloneWebsite(options) {
       images: [],
       fonts: [],
       videos: [],
-      audio: []
+      audio: [],
+      backgroundImages: [],
+      icons: []
     };
 
     let progress = 0;
@@ -280,6 +333,67 @@ async function cloneWebsite(options) {
       progress += progressSteps.audio;
     }
 
+    // Clone background images
+    if (options.cloneImages) {
+      chrome.runtime.sendMessage({ 
+        action: 'updateStatus', 
+        message: 'Cloning Background Images...', 
+        progress 
+      });
+
+      const backgroundImageUrls = getBackgroundImages();
+      for (const url of backgroundImageUrls) {
+        try {
+          const absoluteUrl = new URL(url, window.location.href).href;
+          const response = await fetch(absoluteUrl);
+          const blob = await response.blob();
+          resources.backgroundImages.push({
+            url: absoluteUrl,
+            blob: blob
+          });
+        } catch (error) {
+          const errorMessage = `Failed to clone background image from ${url}: ${error.message}`;
+          console.error(errorMessage);
+          if (options.handleCORS) {
+            chrome.runtime.sendMessage({ 
+              action: 'updateStatus', 
+              error: errorMessage
+            });
+          }
+        }
+      }
+    }
+
+    // Clone icons
+    if (options.cloneImages) {
+      chrome.runtime.sendMessage({ 
+        action: 'updateStatus', 
+        message: 'Cloning Icons...', 
+        progress 
+      });
+
+      const iconUrls = getIconUrls();
+      for (const url of iconUrls) {
+        try {
+          const response = await fetch(url);
+          const blob = await response.blob();
+          resources.icons.push({
+            url: url,
+            blob: blob
+          });
+        } catch (error) {
+          const errorMessage = `Failed to clone icon from ${url}: ${error.message}`;
+          console.error(errorMessage);
+          if (options.handleCORS) {
+            chrome.runtime.sendMessage({ 
+              action: 'updateStatus', 
+              error: errorMessage
+            });
+          }
+        }
+      }
+    }
+
     // Create ZIP with all resources
     chrome.runtime.sendMessage({ 
       action: 'updateStatus', 
@@ -368,6 +482,26 @@ async function cloneWebsite(options) {
       });
     }
 
+    // Add background images to ZIP
+    if (options.cloneImages && resources.backgroundImages.length > 0) {
+      const bgFolder = zip.folder('images/background');
+      resources.backgroundImages.forEach((image, index) => {
+        const extension = image.url.split('.').pop().split('?')[0] || 'png';
+        const fileName = `background-${index}.${extension}`;
+        bgFolder.file(fileName, image.blob);
+      });
+    }
+
+    // Add icons to ZIP
+    if (options.cloneImages && resources.icons.length > 0) {
+      const iconFolder = zip.folder('images/icons');
+      resources.icons.forEach((icon, index) => {
+        const extension = icon.url.split('.').pop().split('?')[0] || 'ico';
+        const fileName = `icon-${index}.${extension}`;
+        iconFolder.file(fileName, icon.blob);
+      });
+    }
+
     // Generate and download ZIP
     chrome.runtime.sendMessage({ 
       action: 'updateStatus', 
@@ -381,7 +515,7 @@ async function cloneWebsite(options) {
     chrome.runtime.sendMessage({
       action: 'download',
       url: url,
-      filename: 'website-clone.zip'
+      filename: `${folderName}.zip`
     });
 
     chrome.runtime.sendMessage({ 
