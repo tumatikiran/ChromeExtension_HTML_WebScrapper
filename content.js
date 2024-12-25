@@ -15,18 +15,61 @@ function extractUrlsFromCSS(cssText) {
 
 // Add this function to get computed styles
 function getBackgroundImages() {
-  const elements = document.querySelectorAll('*');
   const urls = new Set();
+  const elements = document.querySelectorAll('*');
 
   elements.forEach(element => {
     const computedStyle = window.getComputedStyle(element);
-    const backgroundImage = computedStyle.backgroundImage;
     
-    if (backgroundImage && backgroundImage !== 'none') {
-      const extractedUrls = extractUrlsFromCSS(backgroundImage);
-      extractedUrls.forEach(url => urls.add(url));
-    }
+    // Check all background-related properties
+    const backgroundProps = [
+      'backgroundImage',
+      'background',
+      'borderImage',
+      'listStyleImage'
+    ];
+
+    backgroundProps.forEach(prop => {
+      const value = computedStyle[prop];
+      if (value && value !== 'none') {
+        const matches = value.match(/url\(['"]?([^'"()]+)['"]?\)/g);
+        if (matches) {
+          matches.forEach(match => {
+            const url = match.replace(/url\(['"]?([^'"()]+)['"]?\)/, '$1');
+            if (!url.startsWith('data:')) {
+              urls.add(url);
+            }
+          });
+        }
+      }
+    });
+
+    // Check for custom data attributes that might contain image URLs
+    Array.from(element.attributes).forEach(attr => {
+      if (attr.name.startsWith('data-') && attr.value.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)) {
+        urls.add(attr.value);
+      }
+    });
   });
+
+  // Also check CSS variables that might contain image URLs
+  const rootStyles = window.getComputedStyle(document.documentElement);
+  for (const prop of rootStyles) {
+    if (prop.startsWith('--')) {
+      const value = rootStyles.getPropertyValue(prop);
+      if (value.includes('url(')) {
+        const matches = value.match(/url\(['"]?([^'"()]+)['"]?\)/g);
+        if (matches) {
+          matches.forEach(match => {
+            const url = match.replace(/url\(['"]?([^'"()]+)['"]?\)/, '$1');
+            if (!url.startsWith('data:')) {
+              urls.add(url);
+            }
+          });
+        }
+      }
+    }
+  }
 
   return Array.from(urls);
 }
@@ -35,16 +78,57 @@ function getBackgroundImages() {
 function getIconUrls() {
   const urls = new Set();
   
-  // Get favicon
+  // Get favicon and standard icons
   const favicon = document.querySelector('link[rel="shortcut icon"], link[rel="icon"]');
   if (favicon) {
     urls.add(favicon.href);
   }
   
-  // Get other icons (apple-touch-icon, etc.)
-  const icons = document.querySelectorAll('link[rel*="icon"]');
-  icons.forEach(icon => urls.add(icon.href));
-  
+  // Get all icon-related links
+  const iconLinks = document.querySelectorAll('link[rel*="icon"], link[rel="apple-touch-icon"]');
+  iconLinks.forEach(icon => urls.add(icon.href));
+
+  // Get icons from elements with icon classes
+  const iconElements = document.querySelectorAll(
+    '.icon, .fa, .fas, .far, .fab, .material-icons, ' + 
+    '[class*="icon-"], [class*="ico-"], [class*="fa-"]'
+  );
+
+  iconElements.forEach(element => {
+    // Get background image if exists
+    const style = window.getComputedStyle(element);
+    if (style.backgroundImage && style.backgroundImage !== 'none') {
+      const matches = style.backgroundImage.match(/url\(['"]?([^'"()]+)['"]?\)/g);
+      if (matches) {
+        matches.forEach(match => {
+          const url = match.replace(/url\(['"]?([^'"()]+)['"]?\)/, '$1');
+          urls.add(url);
+        });
+      }
+    }
+
+    // Check for font awesome or other icon font classes
+    element.classList.forEach(className => {
+      if (className.match(/(fa-|icon-|ico-)/)) {
+        // Store the class name for reference
+        console.log('Found icon class:', className);
+      }
+    });
+  });
+
+  // Get icons from sprite sheets and SVG symbols
+  const svgUses = document.querySelectorAll('use[href]');
+  svgUses.forEach(use => {
+    const href = use.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      const svgId = href.substring(1);
+      const svgSymbol = document.querySelector(`#${svgId}`);
+      if (svgSymbol) {
+        urls.add(window.location.href + href);
+      }
+    }
+  });
+
   return Array.from(urls);
 }
 
@@ -403,7 +487,7 @@ async function cloneWebsite(options, folderName) {
 
     const zip = new JSZip();
 
-    // Helper function to get relative path and ensure no duplicate folders
+    // Helper function to get relative path and preserve original structure
     const getRelativePath = (url, type) => {
       try {
         if (url === 'inline') {
@@ -411,16 +495,27 @@ async function cloneWebsite(options, folderName) {
         }
         
         const urlObj = new URL(url);
-        let path = urlObj.pathname.substring(1);
+        let path = urlObj.pathname;
         
+        // Remove leading slash if present
+        if (path.startsWith('/')) {
+          path = path.substring(1);
+        }
+
         // If preserving structure, keep the full path but remove any query parameters
         if (options.preserveStructure) {
           return path.split('?')[0];
         }
         
-        // If not preserving structure, just keep the filename
-        return `${type}/${path.split('/').pop()}`;
-      } catch {
+        // If not preserving structure, maintain at least the last folder and filename
+        const parts = path.split('/');
+        if (parts.length > 1) {
+          return `${type}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+        }
+        
+        return `${type}/${path}`;
+      } catch (error) {
+        console.error('Error processing path:', error);
         return `${type}/${url.split('/').pop() || `file-${Date.now()}.${type}`}`;
       }
     };
@@ -484,21 +579,33 @@ async function cloneWebsite(options, folderName) {
 
     // Add background images to ZIP
     if (options.cloneImages && resources.backgroundImages.length > 0) {
-      const bgFolder = zip.folder('images/background');
-      resources.backgroundImages.forEach((image, index) => {
-        const extension = image.url.split('.').pop().split('?')[0] || 'png';
-        const fileName = `background-${index}.${extension}`;
-        bgFolder.file(fileName, image.blob);
+      resources.backgroundImages.forEach((image) => {
+        try {
+          const path = getRelativePath(image.url, 'images');
+          zip.file(path, image.blob);
+        } catch (error) {
+          console.error('Error adding background image to ZIP:', error);
+          const extension = image.url.split('.').pop().split('?')[0] || 'png';
+          const originalName = image.url.split('/').pop().split('?')[0];
+          const fileName = originalName || `background-${Date.now()}.${extension}`;
+          zip.file(`images/${fileName}`, image.blob);
+        }
       });
     }
 
     // Add icons to ZIP
     if (options.cloneImages && resources.icons.length > 0) {
-      const iconFolder = zip.folder('images/icons');
-      resources.icons.forEach((icon, index) => {
-        const extension = icon.url.split('.').pop().split('?')[0] || 'ico';
-        const fileName = `icon-${index}.${extension}`;
-        iconFolder.file(fileName, icon.blob);
+      resources.icons.forEach((icon) => {
+        try {
+          const path = getRelativePath(icon.url, 'images');
+          zip.file(path, icon.blob);
+        } catch (error) {
+          console.error('Error adding icon to ZIP:', error);
+          const extension = icon.url.split('.').pop().split('?')[0] || 'ico';
+          const originalName = icon.url.split('/').pop().split('?')[0];
+          const fileName = originalName || `icon-${Date.now()}.${extension}`;
+          zip.file(`images/${fileName}`, icon.blob);
+        }
       });
     }
 
