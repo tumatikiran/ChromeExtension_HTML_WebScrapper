@@ -33,6 +33,12 @@ document.getElementById('cloneButton').addEventListener('click', async () => {
     preserveStructure: document.getElementById('preserveStructure').checked
   };
   
+  // Create folder name from URL
+  const url = new URL(currentTab.url);
+  const websiteName = url.hostname.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  const folderName = `${websiteName}_${timestamp}`;
+  
   // Reset UI
   progressContainer.style.display = 'block';
   progressBar.style.width = '0%';
@@ -54,10 +60,11 @@ document.getElementById('cloneButton').addEventListener('click', async () => {
       files: ['content.js']
     });
 
-    // Finally send the message
+    // Finally send the options and folder name
     await chrome.tabs.sendMessage(currentTab.id, {
       action: 'startCloning',
-      options: options
+      options: options,
+      folderName: folderName
     });
   } catch (error) {
     statusElement.textContent = 'Error: ' + error.message;
